@@ -13,8 +13,11 @@ import com.zideck.foodregest.ml.PhotoPrediction
 import com.zideck.foodregest.ml.Preprocess
 import com.zideck.foodregest.settings.AcceleratorChoice
 import com.zideck.foodregest.settings.AppSettings
+import com.zideck.foodregest.settings.CropMode
+import com.zideck.foodregest.settings.ModelVariant
 import com.zideck.foodregest.settings.SettingsStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,12 +29,13 @@ import java.util.concurrent.atomic.AtomicLong
 
 sealed interface ModelState {
     data object Loading : ModelState
-    data class Ready(val info: ModelInfo) : ModelState
+    data class Ready(val infos: List<ModelInfo>) : ModelState
     data class Failed(val message: String) : ModelState
 }
 
-/** Static facts about the loaded model, shown in the settings and the developer info. */
+/** Static facts about one loaded model, shown in the settings and the developer info. */
 data class ModelInfo(
+    val variant: ModelVariant,
     val backbone: String,
     val imageSize: Int,
     val precision: String,
@@ -40,28 +44,30 @@ data class ModelInfo(
     val accelerator: String,
     val loadMs: Long,
 ) {
-    val summary: String get() = "$backbone · $imageSize px · ${precision.uppercase()} · $accelerator"
+    val summary: String get() = "$backbone · $imageSize px · ${variant.short} · ${precision.uppercase()} · $accelerator"
 }
 
-/** One photo of the current meal; [prediction] is filled as soon as the model has run on it. */
+/**
+ * One photo of the current meal. [predictions] holds one entry per active model variant
+ * (in the order of the crop mode, the first is the main one) once the models have run.
+ */
 data class MealPhoto(
     val id: Long,
     val thumbnail: Bitmap,
-    val prediction: PhotoPrediction? = null,
+    val predictions: Map<ModelVariant, PhotoPrediction> = emptyMap(),
     val accelerator: String? = null,
     val error: String? = null,
-)
+) {
+    val prediction: PhotoPrediction? get() = predictions.values.firstOrNull()
+}
 
-/** Rolling statistics of the live estimate on camera frames (developer tool). */
-data class LiveStats(
-    val massG: Double,
-    val kcal: Double,
-    val frameMs: Long,
-    val inferenceMs: Long,
-    val fps: Double,
-)
+/** Live estimate on camera frames (developer tool): one value per active variant. */
+data class LiveValue(val variant: ModelVariant, val massG: Double, val kcal: Double, val inferenceMs: Long)
+
+data class LiveStats(val values: List<LiveValue>, val frameMs: Long, val fps: Double)
 
 data class BenchmarkResult(
+    val variant: ModelVariant,
     val accelerator: String,
     val runs: Int,
     val meanMs: Double,
@@ -76,16 +82,20 @@ data class MemoryInfo(val javaHeapMb: Double, val nativeHeapMb: Double)
 data class UiState(
     val model: ModelState = ModelState.Loading,
     val photos: List<MealPhoto> = emptyList(),
+    /** Main estimate (first variant), carries the user's corrections. */
     val estimate: MealEstimate? = null,
+    /** Estimate of every active variant (more than one in the "both" crop mode). */
+    val estimates: Map<ModelVariant, MealEstimate> = emptyMap(),
     val showResult: Boolean = false,
     val message: String? = null,
     val live: LiveStats? = null,
-    val benchmark: BenchmarkResult? = null,
+    val benchmark: List<BenchmarkResult> = emptyList(),
     val benchmarking: Boolean = false,
 ) {
-    val pending: Boolean get() = photos.any { it.prediction == null && it.error == null }
+    val pending: Boolean get() = photos.any { it.predictions.isEmpty() && it.error == null }
     val ready: List<PhotoPrediction> get() = photos.mapNotNull { it.prediction }
-    val modelInfo: ModelInfo? get() = (model as? ModelState.Ready)?.info
+    val modelInfos: List<ModelInfo> get() = (model as? ModelState.Ready)?.infos.orEmpty()
+    val modelInfo: ModelInfo? get() = modelInfos.firstOrNull()
 }
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -96,48 +106,77 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state
 
-    /** Guards [estimator]: it is swapped when the accelerator changes while other threads may use it. */
+    /** Guards [estimators]: they are swapped when a setting changes while other threads may use them. */
     private val lock = Any()
-    private var estimator: FoodEstimator? = null
+    private var estimators: Map<ModelVariant, FoodEstimator> = emptyMap()
     private val ids = AtomicLong()
     private var lastLiveFrame = 0L
+    private var loadJob: Job? = null
 
     init {
-        loadModel(settings.value.accelerator)
+        loadModels()
     }
 
-    // ------------------------------------------------------------------ model --
+    // ------------------------------------------------------------------ models --
 
-    private fun loadModel(choice: AcceleratorChoice) {
-        _state.update { it.copy(model = ModelState.Loading, live = null, benchmark = null) }
-        viewModelScope.launch {
+    private fun loadModels() {
+        val s = settings.value
+        _state.update { it.copy(model = ModelState.Loading, live = null, benchmark = emptyList()) }
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
             val result = withContext(Dispatchers.Default) {
-                runCatching { FoodEstimator.create(getApplication(), choice.order) }
+                runCatching {
+                    val loaded = LinkedHashMap<ModelVariant, FoodEstimator>()
+                    try {
+                        for (v in s.cropMode.variants) {
+                            loaded[v] = FoodEstimator.create(getApplication(), v.metaFile, s.accelerator.order)
+                        }
+                    } catch (t: Throwable) {
+                        loaded.values.forEach { it.close() }
+                        throw t
+                    }
+                    loaded
+                }
             }
-            result.onSuccess { e ->
-                val old = synchronized(lock) { estimator.also { estimator = e } }
-                old?.close()
-                val info = ModelInfo(
-                    backbone = e.meta.backbone, imageSize = e.meta.imageSize, precision = e.meta.precision,
-                    file = e.meta.modelFile, fileMb = e.modelBytes / 1048576.0,
-                    accelerator = e.accelerator.name, loadMs = e.loadMs,
-                )
-                _state.update { it.copy(model = ModelState.Ready(info)) }
+            result.onSuccess { loaded ->
+                val old = synchronized(lock) { estimators.also { estimators = loaded } }
+                old.values.forEach { it.close() }
+                val infos = loaded.map { (v, e) ->
+                    ModelInfo(v, e.meta.backbone, e.meta.imageSize, e.meta.precision, e.meta.modelFile,
+                        e.modelBytes / 1048576.0, e.accelerator.name, e.loadMs)
+                }
+                _state.update { it.copy(model = ModelState.Ready(infos)) }
+                repredictAll()
             }.onFailure { t ->
-                val old = synchronized(lock) { estimator.also { estimator = null } }
-                old?.close()
+                val old = synchronized(lock) { estimators.also { estimators = emptyMap() } }
+                old.values.forEach { it.close() }
                 _state.update { it.copy(model = ModelState.Failed(t.message ?: t.javaClass.simpleName)) }
             }
         }
     }
 
-    private fun <T> withEstimator(block: (FoodEstimator) -> T): T? = synchronized(lock) { estimator?.let(block) }
+    private fun <T> withEstimators(block: (Map<ModelVariant, FoodEstimator>) -> T): T? =
+        synchronized(lock) { estimators.takeIf { it.isNotEmpty() }?.let(block) }
 
-    private suspend fun awaitModel() {
+    private suspend fun awaitModels() {
         while (_state.value.model is ModelState.Loading) delay(50)
     }
 
-    // --------------------------------------------------------------- settings --
+    /** Runs every active model on [bitmap]; the map keeps the order of the crop mode. */
+    private fun predictAll(bitmap: Bitmap): Pair<Map<ModelVariant, PhotoPrediction>, String> =
+        withEstimators { es ->
+            es.mapValues { (_, e) -> e.predict(bitmap) } to es.values.map { it.accelerator.name }.distinct().joinToString("/")
+        } ?: error("model not loaded")
+
+    /** After a model change: run the new models on the photos of the current meal. */
+    private fun repredictAll() {
+        val photos = _state.value.photos
+        if (photos.isEmpty()) return
+        _state.update { s -> s.copy(photos = s.photos.map { it.copy(predictions = emptyMap(), error = null) }) }
+        photos.forEach { predict(it.id, it.thumbnail) }
+    }
+
+    // ---------------------------------------------------------------- settings --
 
     fun setDeveloperInfo(on: Boolean) = settingsStore.update { it.copy(developerInfo = on) }
 
@@ -149,10 +188,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setAccelerator(choice: AcceleratorChoice) {
         if (choice == settings.value.accelerator) return
         settingsStore.update { it.copy(accelerator = choice) }
-        loadModel(choice)
+        loadModels()
     }
 
-    // ----------------------------------------------------------------- photos --
+    fun setCropMode(mode: CropMode) {
+        if (mode == settings.value.cropMode) return
+        settingsStore.update { it.copy(cropMode = mode) }
+        loadModels()
+    }
+
+    // ------------------------------------------------------------------ photos --
 
     /** Photo taken with the camera (JPEG in the cache directory, deleted after decoding). */
     fun addPhoto(file: File) = add { Preprocess.decode(file, DECODE_SHORT_SIDE).also { file.delete() } }
@@ -172,24 +217,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             _state.update { it.copy(photos = it.photos + MealPhoto(id, bitmap)) }
-            awaitModel()
-            val result = withContext(Dispatchers.Default) {
-                runCatching { withEstimator { e -> e.predict(bitmap) to e.accelerator.name } ?: error("model not loaded") }
-            }
+            predict(id, bitmap)
+        }
+    }
+
+    private fun predict(id: Long, bitmap: Bitmap) {
+        viewModelScope.launch {
+            awaitModels()
+            val result = withContext(Dispatchers.Default) { runCatching { predictAll(bitmap) } }
             _state.update { s ->
                 val photos = s.photos.map { p ->
                     if (p.id != id) p
                     else result.fold(
-                        { (pred, acc) -> p.copy(prediction = pred, accelerator = acc) },
+                        { (preds, acc) -> p.copy(predictions = preds, accelerator = acc, error = null) },
                         { p.copy(error = it.message ?: "inference failed") },
                     )
                 }
-                s.copy(photos = photos).withEstimate()
+                s.copy(photos = photos).withEstimates()
             }
         }
     }
 
-    fun removePhoto(id: Long) = _state.update { s -> s.copy(photos = s.photos.filterNot { it.id == id }).withEstimate() }
+    fun removePhoto(id: Long) = _state.update { s -> s.copy(photos = s.photos.filterNot { it.id == id }).withEstimates() }
 
     fun showResult(show: Boolean) = _state.update { it.copy(showResult = show && it.estimate != null) }
 
@@ -203,31 +252,39 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun messageShown() = _state.update { it.copy(message = null) }
 
-    /** Recomputes the combined estimate; keeps the user's corrections. */
-    private fun UiState.withEstimate(): UiState {
-        val meta = withEstimator { it.meta } ?: return this
-        val preds = ready
-        if (preds.isEmpty()) return copy(estimate = null, showResult = false)
-        val fresh = MealEstimate.combine(preds, meta)
-        return copy(estimate = fresh.copy(massCorrectedG = estimate?.massCorrectedG, chosenDish = estimate?.chosenDish))
+    /** Recomputes the estimate of every variant; the main one keeps the user's corrections. */
+    private fun UiState.withEstimates(): UiState {
+        val metas = withEstimators { es -> es.mapValues { it.value.meta } } ?: return this
+        val done = photos.filter { it.predictions.isNotEmpty() }
+        if (done.isEmpty()) return copy(estimate = null, estimates = emptyMap(), showResult = false)
+        val all = metas.mapNotNull { (v, meta) ->
+            val preds = done.mapNotNull { it.predictions[v] }
+            if (preds.isEmpty()) null else v to MealEstimate.combine(preds, meta)
+        }.toMap()
+        val main = all.values.firstOrNull()
+        return copy(
+            estimates = all,
+            estimate = main?.copy(massCorrectedG = estimate?.massCorrectedG, chosenDish = estimate?.chosenDish),
+        )
     }
 
     // ------------------------------------------------------- developer tools --
 
     /**
      * Live estimate on one camera frame; called on the camera's analysis thread. Frames that
-     * arrive while the model is busy are dropped by CameraX (keep-only-latest).
+     * arrive while the models are busy are dropped by CameraX (keep-only-latest).
      */
     fun analyzeFrame(frame: Bitmap) {
         val now = SystemClock.elapsedRealtime()
-        val pred = withEstimator { it.predict(frame) } ?: return
+        val preds = withEstimators { es -> es.mapValues { (_, e) -> e.predict(frame) } } ?: return
         val frameMs = SystemClock.elapsedRealtime() - now
         val interval = if (lastLiveFrame == 0L) 0L else now - lastLiveFrame
         lastLiveFrame = now
         _state.update { s ->
             val fps = if (interval > 0) 1000.0 / interval else 0.0
             val smooth = s.live?.fps?.takeIf { it > 0 }?.let { 0.8 * it + 0.2 * fps } ?: fps
-            s.copy(live = LiveStats(pred.massG, pred.kcal, frameMs, pred.inferenceMs, smooth))
+            val values = preds.map { (v, p) -> LiveValue(v, p.massG, p.kcal, p.inferenceMs) }
+            s.copy(live = LiveStats(values, frameMs, smooth))
         }
     }
 
@@ -236,24 +293,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(live = null) }
     }
 
-    /** Times [runs] model runs on the last photo (or a grey image when there is none). */
+    /** Times [runs] runs of every active model on the last photo (or a grey image when there is none). */
     fun runBenchmark(runs: Int = 50) {
         if (_state.value.benchmarking) return
         _state.update { it.copy(benchmarking = true) }
         viewModelScope.launch {
-            awaitModel()
+            awaitModels()
             val photo = _state.value.photos.lastOrNull()?.thumbnail
             val result = withContext(Dispatchers.Default) {
                 runCatching {
-                    withEstimator { e ->
-                        val size = e.meta.imageSize
-                        val tensor = photo?.let { Preprocess.toTensor(it, size) } ?: FloatArray(size * size * 3) { 0.5f }
-                        val ms = e.benchmark(tensor, runs).sorted()
-                        BenchmarkResult(
-                            accelerator = e.accelerator.name, runs = runs, meanMs = ms.average(),
-                            p50Ms = ms[ms.size / 2], p90Ms = ms[(ms.size * 9) / 10], minMs = ms.first(),
-                            input = if (photo != null) "last photo" else "grey image",
-                        )
+                    withEstimators { es ->
+                        es.map { (v, e) ->
+                            val size = e.meta.imageSize
+                            val tensor = photo?.let { Preprocess.toTensor(it, e.meta) } ?: FloatArray(size * size * 3) { 0.5f }
+                            val ms = e.benchmark(tensor, runs).sorted()
+                            BenchmarkResult(
+                                variant = v, accelerator = e.accelerator.name, runs = runs, meanMs = ms.average(),
+                                p50Ms = ms[ms.size / 2], p90Ms = ms[(ms.size * 9) / 10], minMs = ms.first(),
+                                input = if (photo != null) "last photo" else "grey image",
+                            )
+                        }
                     } ?: error("model not loaded")
                 }
             }
@@ -275,15 +334,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
-        synchronized(lock) { estimator?.close(); estimator = null }
+        synchronized(lock) { estimators.values.forEach { it.close() }; estimators = emptyMap() }
     }
 
     companion object {
         const val MAX_PHOTOS = 5
         /**
-         * Photos are decoded straight to the model's input size (shorter side), so the decoder does the
-         * one high-quality downscale and [com.zideck.foodregest.ml.Preprocess.toTensor] only crops.
-         * Must match `image_size` in food_stage1.json; other sizes still work (rescaled bilinearly).
+         * Photos are decoded with the shorter side at the model's input size, so the decoder does the
+         * main downscale; centre crop then only crops, pad-to-square pads and scales once more.
+         * Must match `image_size` in the model JSON; other sizes still work (rescaled bilinearly).
          */
         const val DECODE_SHORT_SIDE = 320
     }

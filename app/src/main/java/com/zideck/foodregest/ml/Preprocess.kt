@@ -2,6 +2,7 @@ package com.zideck.foodregest.ml
 
 import android.content.ContentResolver
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.ImageDecoder
 import android.net.Uri
 import java.io.File
@@ -31,6 +32,30 @@ object Preprocess {
 
     fun decode(resolver: ContentResolver, uri: Uri, shortSide: Int): Bitmap =
         decode(ImageDecoder.createSource(resolver, uri), shortSide)
+
+    /** Tensor for a model: centre crop or pad to square, depending on how the model was trained. */
+    fun toTensor(bitmap: Bitmap, meta: ModelMeta): FloatArray =
+        if (meta.crop == ModelMeta.CROP_PAD) padToTensor(bitmap, meta.imageSize, meta.padFill)
+        else toTensor(bitmap, meta.imageSize)
+
+    /**
+     * Pad to a square with [fill] (image centred, like trainer.PadSquare), resize to [size] x [size],
+     * NHWC float tensor in 0..1. The whole photo stays visible.
+     */
+    fun padToTensor(bitmap: Bitmap, size: Int, fill: Int): FloatArray {
+        val side = max(bitmap.width, bitmap.height)
+        val square = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
+        Canvas(square).apply {
+            drawColor(fill)
+            drawBitmap(bitmap, ((side - bitmap.width) / 2).toFloat(), ((side - bitmap.height) / 2).toFloat(), null)
+        }
+        val scaled = if (side == size) square else Bitmap.createScaledBitmap(square, size, size, true)
+        val pixels = IntArray(size * size)
+        scaled.getPixels(pixels, 0, size, 0, 0, size, size)
+        if (scaled !== square) scaled.recycle()
+        square.recycle()
+        return pixelsToTensor(pixels)
+    }
 
     /** Resize (shorter side = [size]) + centre crop + NHWC float tensor in 0..1. */
     fun toTensor(bitmap: Bitmap, size: Int): FloatArray {

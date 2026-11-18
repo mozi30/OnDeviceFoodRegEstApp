@@ -28,7 +28,7 @@ class FoodEstimator private constructor(
     @Synchronized
     fun predict(bitmap: Bitmap): PhotoPrediction {
         val t0 = SystemClock.elapsedRealtime()
-        val tensor = Preprocess.toTensor(bitmap, meta.imageSize)
+        val tensor = Preprocess.toTensor(bitmap, meta)
         val t1 = SystemClock.elapsedRealtime()
         val out = run(tensor)
         val t2 = SystemClock.elapsedRealtime()
@@ -65,14 +65,14 @@ class FoodEstimator private constructor(
 
     companion object {
         private const val TAG = "FoodEstimator"
-        const val META_FILE = "food_stage1.json"
 
         fun create(
             context: Context,
+            metaFile: String,
             accelerators: List<Accelerator> = listOf(Accelerator.GPU, Accelerator.CPU),
             precision: String = "fp16",
         ): FoodEstimator {
-            val meta = ModelMeta.parse(context.assets.open(META_FILE).bufferedReader().use { it.readText() }, precision)
+            val meta = ModelMeta.parse(context.assets.open(metaFile).bufferedReader().use { it.readText() }, precision)
             var lastError: Exception? = null
             for (acc in accelerators) {
                 val t0 = SystemClock.elapsedRealtime()

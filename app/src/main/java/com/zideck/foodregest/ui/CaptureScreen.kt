@@ -221,13 +221,17 @@ private fun Thumbnail(photo: MealPhoto, developerInfo: Boolean, onRemove: () -> 
             photo.thumbnail.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)),
         )
-        val p = photo.prediction
+        val preds = photo.predictions
         Text(
             when {
                 photo.error != null -> "error"
-                p == null -> "…"
-                developerInfo -> "${p.massG.toInt()} g\n${p.preprocessMs + p.inferenceMs} ms"
-                else -> "${p.massG.toInt()} g"
+                preds.isEmpty() -> "…"
+                // several variants ("both" crop mode): one line each, e.g. "crop 230 g" / "pad 245 g"
+                preds.size > 1 -> preds.entries.joinToString("\n") { (v, p) ->
+                    "${v.short} ${p.massG.toInt()} g" + if (developerInfo) " · ${p.preprocessMs + p.inferenceMs} ms" else ""
+                }
+                developerInfo -> preds.values.first().let { p -> "${p.massG.toInt()} g\n${p.preprocessMs + p.inferenceMs} ms" }
+                else -> "${preds.values.first().massG.toInt()} g"
             },
             color = Color.White, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)
@@ -245,8 +249,9 @@ private fun Thumbnail(photo: MealPhoto, developerInfo: Boolean, onRemove: () -> 
 private fun LiveOverlay(live: LiveStats?, modifier: Modifier = Modifier) {
     Text(
         if (live == null) "live: waiting for frames…"
-        else "live: ${live.massG.toInt()} g · ${live.kcal.toInt()} kcal\n" +
-            "${live.frameMs} ms/frame (model ${live.inferenceMs} ms) · %.1f fps".format(live.fps),
+        else live.values.joinToString("\n") { v ->
+            "live ${v.variant.short}: ${v.massG.toInt()} g · ${v.kcal.toInt()} kcal (model ${v.inferenceMs} ms)"
+        } + "\n${live.frameMs} ms/frame · %.1f fps".format(live.fps),
         color = Color.White, style = MaterialTheme.typography.labelMedium,
         modifier = modifier.padding(8.dp).background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
             .padding(horizontal = 8.dp, vertical = 4.dp),
@@ -266,7 +271,9 @@ private fun ImageProxy.toUprightBitmap(): Bitmap {
 fun ModelStatus(model: ModelState, developerInfo: Boolean) {
     val text = when (model) {
         ModelState.Loading -> "Loading model…"
-        is ModelState.Ready -> if (developerInfo) "${model.info.summary} · loaded in ${model.info.loadMs} ms" else return
+        is ModelState.Ready -> if (developerInfo) model.infos.joinToString("\n") { "${it.summary} · loaded in ${it.loadMs} ms" }
+            else if (model.infos.size > 1) "Comparing: ${model.infos.joinToString(" vs ") { it.variant.label.lowercase() }}"
+            else return
         is ModelState.Failed -> "Model failed to load: ${model.message}"
     }
     Text(

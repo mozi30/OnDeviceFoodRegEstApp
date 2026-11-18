@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.zideck.foodregest.settings.AcceleratorChoice
 import com.zideck.foodregest.settings.AppSettings
+import com.zideck.foodregest.settings.CropMode
 
 @Composable
 fun SettingsScreen(state: UiState, settings: AppSettings, vm: MainViewModel, modifier: Modifier = Modifier) {
@@ -55,6 +56,33 @@ fun SettingsScreen(state: UiState, settings: AppSettings, vm: MainViewModel, mod
             }
         }
 
+        SectionTitle("Image preprocessing (crop)")
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(vertical = 4.dp)) {
+                CropMode.entries.forEach { mode ->
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .selectable(settings.cropMode == mode, role = Role.RadioButton) { vm.setCropMode(mode) }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = settings.cropMode == mode, onClick = null)
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text(mode.label)
+                            Text(mode.description, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                Text(
+                    "Each mode uses the model trained with that preprocessing. Changing it re-runs the photos of the current meal.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+        }
+
         SectionTitle("Accelerator")
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(vertical = 4.dp)) {
@@ -73,7 +101,7 @@ fun SettingsScreen(state: UiState, settings: AppSettings, vm: MainViewModel, mod
                 Text(
                     when (val m = state.model) {
                         ModelState.Loading -> "Loading model…"
-                        is ModelState.Ready -> "Running on ${m.info.accelerator}"
+                        is ModelState.Ready -> "Running on " + m.infos.joinToString(", ") { "${it.accelerator} (${it.variant.short})" }
                         is ModelState.Failed -> "Failed: ${m.message}"
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -88,7 +116,7 @@ fun SettingsScreen(state: UiState, settings: AppSettings, vm: MainViewModel, mod
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "50 model runs on the last photo of the current meal (grey image if there is none). " +
+                    "50 runs of each active model on the last photo of the current meal (grey image if there is none). " +
                         "Inference only, without decoding and preprocessing.",
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -101,7 +129,8 @@ fun SettingsScreen(state: UiState, settings: AppSettings, vm: MainViewModel, mod
                         CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                     }
                 }
-                state.benchmark?.let { b ->
+                state.benchmark.forEach { b ->
+                    if (state.benchmark.size > 1) Text(b.variant.label, fontWeight = FontWeight.SemiBold)
                     KeyValue("Accelerator", b.accelerator)
                     KeyValue("Median", "%.1f ms".format(b.p50Ms))
                     KeyValue("Mean", "%.1f ms".format(b.meanMs))
@@ -115,10 +144,11 @@ fun SettingsScreen(state: UiState, settings: AppSettings, vm: MainViewModel, mod
         SectionTitle("Model")
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                val info = state.modelInfo
-                if (info == null) Text("Not loaded")
-                else {
+                if (state.modelInfos.isEmpty()) Text("Not loaded")
+                state.modelInfos.forEach { info ->
+                    if (state.modelInfos.size > 1) Text(info.variant.label, fontWeight = FontWeight.SemiBold)
                     KeyValue("Backbone", info.backbone)
+                    KeyValue("Crop", info.variant.label)
                     KeyValue("Input", "${info.imageSize} × ${info.imageSize} px")
                     KeyValue("Precision", info.precision.uppercase())
                     KeyValue("File", "${info.file} (%.1f MB)".format(info.fileMb))

@@ -1,5 +1,6 @@
 package com.zideck.foodregest.ml
 
+import com.zideck.foodregest.settings.ModelVariant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -95,12 +96,16 @@ class MealEstimateTest {
     }
 
     @Test
-    fun bundledMetadataMatchesTheModelContract() {
-        val json = File("src/main/assets/${FoodEstimator.META_FILE}").readText()
-        val m = ModelMeta.parse(json)
-        assertEquals(7, m.nFixed)
-        assertEquals("food_stage1_fp16.tflite", m.modelFile)
-        assertTrue(File("src/main/assets/${m.modelFile}").isFile)
-        assertTrue(m.dishes.isNotEmpty() && m.ingredients.isNotEmpty())
+    fun bundledModelsMatchTheContract() {
+        for (v in ModelVariant.entries) {
+            val m = ModelMeta.parse(File("src/main/assets/${v.metaFile}").readText())
+            assertEquals(7, m.nFixed)
+            assertEquals(320, m.imageSize)
+            assertEquals(if (v == ModelVariant.PAD) ModelMeta.CROP_PAD else ModelMeta.CROP_CENTER, m.crop)
+            assertTrue(File("src/main/assets/${m.modelFile}").isFile)
+            assertTrue(m.dishes.isNotEmpty() && m.ingredients.isNotEmpty())
+        }
+        val pad = ModelMeta.parse(File("src/main/assets/${ModelVariant.PAD.metaFile}").readText())
+        assertEquals(0xFF7C7468.toInt(), pad.padFill) // RGB 124, 116, 104 as in trainer.PadSquare
     }
 }
