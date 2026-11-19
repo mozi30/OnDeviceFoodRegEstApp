@@ -25,10 +25,11 @@ Nothing is stored or sent anywhere yet.
   median model / preprocessing time, load + warm-up time and Java / native heap on the result.
 - **Live estimate on camera**: runs the model on every preview frame (CameraX image
   analysis, keep-only-latest) and shows weight, kcal, ms per frame, model ms and fps.
-- **Image preprocessing (crop)**: *Center crop* (square from the middle, edges cut off),
-  *Pad to square* (whole photo, grey bars) or *Both (compare)*: both models run on every
-  photo; thumbnails, live overlay, benchmark and a "Crop comparison" card on the result
-  show both estimates. Each mode uses the model trained with that preprocessing.
+- **Model**: *Western model* (default), *Western vs. v1 pad (compare)*, or the first models
+  *v1 center crop* (square from the middle, edges cut off), *v1 pad to square* (whole photo,
+  grey bars) and *v1 both crops (compare)*. The compare modes run two models on every photo;
+  thumbnails, live overlay, benchmark and a comparison card on the result show both
+  estimates. Each model gets the photo prepared the way it was trained.
 - **Accelerator**: Auto (GPU, CPU fallback), GPU only or CPU only; the models reload.
 - **Benchmark**: 50 runs on the last photo (or a grey image): median, mean, p90, fastest.
 - **Model**: file, size, input, precision, load time, memory, app version.
@@ -50,17 +51,23 @@ export JAVA_HOME=/usr/local/android-studio/jbr
 
 ## Model
 
-`app/src/main/assets/` holds two models (MobileNetV3-Large, 320 px, FP16, trained on
+`app/src/main/assets/` holds three models (MobileNetV3-Large, 320 px, FP16, trained on
 cleaned labels) and their contracts:
 
-| Files | Preprocessing | Test score (desktop check) |
-|---|---|---|
-| `food_stage1_center_fp16.tflite` + `food_stage1_center.json` | shorter side to 320, centre crop | 24.65 |
-| `food_stage1_pad_fp16.tflite` + `food_stage1_pad.json` | pad to square with RGB (124, 116, 104), resize to 320 × 320 | 24.26 |
+| Files | Preprocessing | Dishes / ingredients | Test score (desktop check) |
+|---|---|---|---|
+| `food_stage1_western_fp16.tflite` + `food_stage1_western.json` (default) | pad to square | 1,300 / 862 | **23.56** |
+| `food_stage1_center_fp16.tflite` + `food_stage1_center.json` (v1) | shorter side to 320, centre crop | 49 / 170 | 24.65 |
+| `food_stage1_pad_fp16.tflite` + `food_stage1_pad.json` (v1) | pad to square with RGB (124, 116, 104), resize to 320 × 320 | 49 / 170 | 24.26 |
+
+The Western model (`runs/western/mm_f101_s1`, 16 MB) is also trained on MM-Food-100K and
+Food-101 for dish / ingredient recognition only (never for weight or nutrition) and has its own
+1024-wide recognition layer. On the test sets it finds the right dish first in 81 % of the photos
+(v1: 74 %) and on held-out Food-101 photos in 54 % (top 5: 79 %).
 
 Input float32 `[1, 320, 320, 3]` RGB in 0..1 (ImageNet normalisation is inside the model).
-Output one vector `[mass_g, kcal, fat_g, carb_g, protein_g, log_mass, log_std90, 50 dish probs,
-171 ingredient probs]`. The JSON holds labels, input size, crop mode, output layout and calibration.
+Output one vector `[mass_g, kcal, fat_g, carb_g, protein_g, log_mass, log_std90, dish probs...,
+ingredient probs...]` (v1: 50 + 171, Western: 1,301 + 863, each including "other"). The JSON holds labels, input size, crop mode, output layout and calibration.
 
 To update them, export from the training repository and copy the files:
 
@@ -69,7 +76,8 @@ cd ../OnDeviceFoodRegEst
 E=~/.cache/ondevice_food/export-venv/bin/python
 PYTHONPATH=. $E -m training.export_litert runs/clean/mobilenetv3_large_img320_s0/best.pt --out export/food_stage1_center
 PYTHONPATH=. $E -m training.export_litert runs/clean/mobilenetv3_large_img320_pad_s0/best.pt --out export/food_stage1_pad
-cp export/food_stage1_{center,pad}.json export/food_stage1_{center,pad}_fp16.tflite ../OnDeviceFoodRegEstApp/app/src/main/assets/
+PYTHONPATH=. $E -m training.export_litert runs/western/mm_f101_s1/best.pt --out export/food_stage1_western
+cp export/food_stage1_{center,pad,western}.json export/food_stage1_{center,pad,western}_fp16.tflite ../OnDeviceFoodRegEstApp/app/src/main/assets/
 ```
 
 Checked on the desktop with `training.eval_litert` (`--crop pad` for the pad model): both FP16

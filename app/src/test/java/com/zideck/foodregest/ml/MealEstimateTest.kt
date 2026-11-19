@@ -101,11 +101,13 @@ class MealEstimateTest {
             val m = ModelMeta.parse(File("src/main/assets/${v.metaFile}").readText())
             assertEquals(7, m.nFixed)
             assertEquals(320, m.imageSize)
-            assertEquals(if (v == ModelVariant.PAD) ModelMeta.CROP_PAD else ModelMeta.CROP_CENTER, m.crop)
+            assertEquals(if (v == ModelVariant.CENTER) ModelMeta.CROP_CENTER else ModelMeta.CROP_PAD, m.crop)
             assertTrue(File("src/main/assets/${m.modelFile}").isFile)
             assertTrue(m.dishes.isNotEmpty() && m.ingredients.isNotEmpty())
         }
         val pad = ModelMeta.parse(File("src/main/assets/${ModelVariant.PAD.metaFile}").readText())
         assertEquals(0xFF7C7468.toInt(), pad.padFill) // RGB 124, 116, 104 as in trainer.PadSquare
+        val western = ModelMeta.parse(File("src/main/assets/${ModelVariant.WESTERN.metaFile}").readText())
+        assertTrue(western.dishes.size > 1000 && "spaghetti bolognese" in western.dishes)
     }
 }

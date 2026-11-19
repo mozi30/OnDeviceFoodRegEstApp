@@ -13,17 +13,29 @@ enum class AcceleratorChoice(val label: String, val order: List<Accelerator>) {
     CPU("CPU only", listOf(Accelerator.CPU)),
 }
 
-/** The two Stage 1 models; they differ in how the photo is made square (as in training). */
+/**
+ * The bundled Stage 1 models. CENTER and PAD are the first models (49 dishes, 170 ingredients),
+ * which differ only in how the photo is made square. WESTERN (pad to square) was also trained on
+ * MM-Food-100K and Food-101 for recognition (about 1,300 dishes incl. Western ones, 860 ingredients)
+ * and has its own recognition layer; it is the default and the most accurate for weight and nutrition.
+ */
 enum class ModelVariant(val label: String, val short: String, val metaFile: String) {
-    CENTER("Center crop", "crop", "food_stage1_center.json"),
-    PAD("Pad to square", "pad", "food_stage1_pad.json"),
+    CENTER("v1 center crop", "v1 crop", "food_stage1_center.json"),
+    PAD("v1 pad to square", "v1 pad", "food_stage1_pad.json"),
+    WESTERN("Western (1,300 dishes)", "western", "food_stage1_western.json"),
 }
 
-/** Which model(s) run on each photo. BOTH runs both and shows the two estimates side by side. */
+/** Which model(s) run on each photo. The compare modes run two models and show both estimates. */
 enum class CropMode(val label: String, val description: String, val variants: List<ModelVariant>) {
-    CENTER("Center crop", "Square from the middle of the photo; the edges are cut off.", listOf(ModelVariant.CENTER)),
-    PAD("Pad to square", "Whole photo, padded with grey to a square.", listOf(ModelVariant.PAD)),
-    BOTH("Both (compare)", "Runs both models on every photo and shows both estimates.", listOf(ModelVariant.CENTER, ModelVariant.PAD)),
+    WESTERN("Western model (default)",
+        "Whole photo padded to a square; recognises about 1,300 dishes incl. European ones.", listOf(ModelVariant.WESTERN)),
+    COMPARE_WESTERN("Western vs. v1 pad (compare)",
+        "Runs the Western and the first pad model on every photo and shows both estimates.",
+        listOf(ModelVariant.PAD, ModelVariant.WESTERN)),
+    CENTER("v1 center crop", "First model; square from the middle of the photo, the edges are cut off.", listOf(ModelVariant.CENTER)),
+    PAD("v1 pad to square", "First model; whole photo, padded with grey to a square.", listOf(ModelVariant.PAD)),
+    BOTH("v1 both crops (compare)", "Runs both first models on every photo and shows both estimates.",
+        listOf(ModelVariant.CENTER, ModelVariant.PAD)),
 }
 
 data class AppSettings(
@@ -32,7 +44,7 @@ data class AppSettings(
     /** Runs the model continuously on the camera preview and shows ms per frame (developer tool). */
     val liveEstimate: Boolean = false,
     val accelerator: AcceleratorChoice = AcceleratorChoice.AUTO,
-    val cropMode: CropMode = CropMode.CENTER,
+    val cropMode: CropMode = CropMode.WESTERN,
 )
 
 /** Settings kept in SharedPreferences, exposed as a StateFlow. */
@@ -47,7 +59,7 @@ class SettingsStore(context: Context) {
         accelerator = prefs.getString(KEY_ACC, null)
             ?.let { name -> AcceleratorChoice.entries.firstOrNull { it.name == name } } ?: AcceleratorChoice.AUTO,
         cropMode = prefs.getString(KEY_CROP, null)
-            ?.let { name -> CropMode.entries.firstOrNull { it.name == name } } ?: CropMode.CENTER,
+            ?.let { name -> CropMode.entries.firstOrNull { it.name == name } } ?: CropMode.WESTERN,
     )
 
     fun update(change: (AppSettings) -> AppSettings) {
@@ -65,6 +77,6 @@ class SettingsStore(context: Context) {
         const val KEY_DEV = "developer_info"
         const val KEY_LIVE = "live_estimate"
         const val KEY_ACC = "accelerator"
-        const val KEY_CROP = "crop_mode"
+        const val KEY_CROP = "model_mode" // was "crop_mode" before the Western model; new key = new default
     }
 }

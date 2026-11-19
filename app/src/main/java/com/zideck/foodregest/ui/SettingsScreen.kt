@@ -56,7 +56,7 @@ fun SettingsScreen(state: UiState, settings: AppSettings, vm: MainViewModel, mod
             }
         }
 
-        SectionTitle("Image preprocessing (crop)")
+        SectionTitle("Model")
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(vertical = 4.dp)) {
                 CropMode.entries.forEach { mode ->
@@ -76,7 +76,7 @@ fun SettingsScreen(state: UiState, settings: AppSettings, vm: MainViewModel, mod
                     }
                 }
                 Text(
-                    "Each mode uses the model trained with that preprocessing. Changing it re-runs the photos of the current meal.",
+                    "Each model gets the photo prepared the way it was trained (crop or pad). Changing it re-runs the photos of the current meal.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
