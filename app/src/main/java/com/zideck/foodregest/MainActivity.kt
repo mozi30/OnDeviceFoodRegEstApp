@@ -10,6 +10,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -36,6 +37,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zideck.foodregest.ui.CaptureScreen
+import com.zideck.foodregest.ui.DepthCaptureScreen
 import com.zideck.foodregest.ui.MainViewModel
 import com.zideck.foodregest.ui.ResultScreen
 import com.zideck.foodregest.ui.SettingsScreen
@@ -50,6 +52,7 @@ class MainActivity : ComponentActivity() {
 
 private enum class Tab(val label: String, val icon: ImageVector) {
     MEAL("Meal", Icons.Filled.Home),
+    DEPTH("Depth", Icons.Filled.Place),
     SETTINGS("Settings", Icons.Filled.Settings),
 }
 
@@ -62,8 +65,8 @@ private fun App(vm: MainViewModel = viewModel()) {
     LaunchedEffect(state.message) {
         state.message?.let { snackbar.showSnackbar(it); vm.messageShown() }
     }
-    BackHandler(enabled = tab == Tab.SETTINGS || state.showResult) {
-        if (tab == Tab.SETTINGS) tab = Tab.MEAL else vm.showResult(false)
+    BackHandler(enabled = tab != Tab.MEAL || state.showResult) {
+        if (tab != Tab.MEAL) tab = Tab.MEAL else vm.showResult(false)
     }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -83,6 +86,7 @@ private fun App(vm: MainViewModel = viewModel()) {
         val m = Modifier.padding(padding)
         when {
             tab == Tab.SETTINGS -> SettingsScreen(state, settings, vm, m)
+            tab == Tab.DEPTH -> DepthCaptureScreen(m)
             state.showResult -> ResultScreen(state, settings.developerInfo, vm, m)
             else -> CaptureScreen(state, settings, vm, m)
         }

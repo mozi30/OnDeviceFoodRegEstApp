@@ -55,6 +55,7 @@ dependencies {
     implementation(libs.androidx.camera.view)
     implementation(libs.litert)
     implementation(libs.litert.gpu)
+    implementation(libs.arcore)
     testImplementation(libs.junit)
     testImplementation(libs.org.json)
     debugImplementation(libs.androidx.compose.ui.tooling)

@@ -36,6 +36,25 @@ Nothing is stored or sent anywhere yet.
 
 Settings are kept in SharedPreferences.
 
+### Depth tab (Stage 2 benchmark capture)
+
+Collects photos with ARCore depth to test monocular depth models at table distance
+(30 cm to 1 m) on this phone. Needs Google Play Services for AR (ARCore Depth API; the
+Pixel 8 Pro supports it); the rest of the app works without it.
+
+- The live overlay shows tracking state, number of detected table planes, the distance to
+  the table along the ray through the centre mark, the camera height above the table and
+  ARCore's depth at the centre. Move the phone slowly for a second until a plane and depth
+  appear.
+- **Capture** saves one folder per photo: `rgb.jpg` (largest ARCore CPU image),
+  `depth.pgm` (smoothed depth) and `raw_depth.pgm` (16-bit, millimetres, 0 = none),
+  `raw_confidence.pgm` (8-bit) and `meta.json` (image intrinsics, camera pose, all
+  tracked horizontal planes with normal, polygon and camera height, centre hit). All images
+  are in the camera sensor orientation (landscape); depth covers the same field of view at
+  a lower resolution.
+- **Export** zips all captures to `Download/FoodDepth_<date>.zip` (copy over USB or upload to
+  Drive). **Delete** removes the captures from the phone.
+
 ## Build and install
 
 Requires Android Studio's JDK and the Android SDK (platform 37); Gradle and AGP versions
@@ -90,8 +109,11 @@ files score the same as their PyTorch checkpoints on the cleaned test sets (side
 - `ml/MealEstimate.kt`: per-photo output, median over photos, weight correction.
 - `ui/`: capture, result and settings screens; `MainViewModel`.
 - `settings/Settings.kt`: persisted settings, accelerator choice.
+- `depth/ArDepthCapture.kt`: ARCore session, camera background, capture and ZIP export;
+  `ui/DepthCaptureScreen.kt` is its screen.
 
 ## Not done yet
 
 - Not yet run on a real phone: GPU delegate, latency, memory and heat still to measure.
-- Saving meals / own test-set logging, INT8 model, depth (Stage 2).
+- Saving meals / own test-set logging, INT8 model, depth as model input (Stage 2).
+- Depth tab built and compiled, not yet tried on the phone.

@@ -7,6 +7,7 @@ activityCompose = "1.13.0"
 composeBom = "2026.02.01"
 camerax = "1.6.2"
 litert = "2.3.2"
+arcore = "1.57.0"
 junit = "4.13.2"
 orgJson = "20250517"
 
@@ -29,6 +30,7 @@ androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycl
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "litert" }
 litert-gpu = { group = "com.google.ai.edge.litert", name = "litert-gpu", version.ref = "litert" }
+arcore = { group = "com.google.ar", name = "core", version.ref = "arcore" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 
